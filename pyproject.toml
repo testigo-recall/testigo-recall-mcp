@@ -1,6 +1,6 @@
 [project]
 name = "testigo-recall-mcp"
-version = "0.5.4"
+version = "0.5.5"
 description = "MCP server for querying testigo-recall knowledge bases"
 readme = "README.md"
 requires-python = ">=3.11"
