@@ -71,7 +71,10 @@ _STATIC_INSTRUCTIONS = (
     "  3. One search_codebase call should answer the question completely. If it returned 10+ "
     "results, you have your answer — STOP.\n"
     "  4. Absolute maximum: 3 calls per user question (e.g. 1 search + 1 drill-down + "
-    "1 repo dependencies).\n\n"
+    "1 repo dependencies).\n"
+    "  5. BETWEEN CALLS: If you need another call, you MUST first output a brief message "
+    "explaining what you still need (e.g. \"I need more details about the payment webhook "
+    "handler\"). This prevents wasteful back-to-back calls and keeps the user informed.\n\n"
 
     "HOW TO SEARCH:\n"
     "The search uses keyword matching (FTS5/BM25), NOT semantic/AI search. "
@@ -142,7 +145,9 @@ def _clean_facts(facts: list[dict]) -> list[dict]:
     """Remove noise fields from fact dicts to save tokens."""
     return [
         {k: v for k, v in f.items()
-         if k not in _NOISE_FIELDS and not (k == "symbols" and v == [])}
+         if k not in _NOISE_FIELDS
+         and not (k == "symbols" and v == [])
+         and not (k == "triggered_by" and v is None)}
         for f in facts
     ]
 
@@ -697,7 +702,7 @@ def search_codebase(
             Use semicolons to batch multiple searches: "auth login; session JWT; middleware"
         category: Optional filter — "behavior" (what it does), "design" (how it's built), or "assumption" (what it expects)
         min_confidence: Minimum confidence threshold 0.0-1.0 (default: 0.0)
-        limit: Max results per query (default: 20). With batched queries, total results can be up to limit × number of queries.
+        limit: Max results per query (default: 20). With batched queries, total results can be up to limit × number of queries (max 70).
         repo_name: Optional filter to scope search to a specific repository
     """
     # Input validation
@@ -725,8 +730,9 @@ def search_codebase(
                 if key not in seen:
                     seen.add(key)
                     results.append(fact)
-        # Cap total results
-        max_total = min(limit * len(queries), 100)
+        # Cap total results — hard ceiling prevents output-too-large (~50KB)
+        # regardless of how many semicolon queries are batched
+        max_total = min(limit * len(queries), 70)
         results = results[:max_total]
 
     if not results:
@@ -735,7 +741,9 @@ def search_codebase(
     # Collapse near-duplicate facts (e.g. same config across country layers)
     results = _dedup_similar_facts(results)
 
-    return json.dumps(_clean_facts(results))
+    payload = json.dumps(_clean_facts(results))
+    # Nudge the agent to state what it still needs before calling again
+    return payload + "\n\n⚠ Before making another call, tell the user what you still need to look up and why."
 
 
 @mcp.tool()
@@ -753,7 +761,8 @@ def get_module_facts(module_id: str) -> str:
     facts = db.get_facts_by_module(module_id)
     if not facts:
         return f"No facts found for module '{module_id}'. Use search_codebase to find valid module IDs."
-    return json.dumps(_clean_facts(facts))
+    payload = json.dumps(_clean_facts(facts))
+    return payload + "\n\n⚠ Before making another call, tell the user what you still need to look up and why."
 
 
 @mcp.tool()
@@ -782,7 +791,8 @@ def get_recent_changes(
         if category:
             return f"No facts found for category '{category}'."
         return "No facts in the knowledge base yet. Run 'testigo-recall scan' first."
-    return json.dumps(_clean_facts(facts))
+    payload = json.dumps(_clean_facts(facts))
+    return payload + "\n\n⚠ Before making another call, tell the user what you still need to look up and why."
 
 
 @mcp.tool()
@@ -803,7 +813,8 @@ def get_component_impact(component_name: str) -> str:
     impacts = db.get_component_impact(component_name)
     if not impacts:
         return f"No dependency data found for '{component_name}'. Try a shorter name or file path."
-    return json.dumps(impacts)
+    payload = json.dumps(impacts)
+    return payload + "\n\n⚠ Before making another call, tell the user what you still need to look up and why."
 
 
 @mcp.tool()
